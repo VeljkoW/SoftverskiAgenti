@@ -1,0 +1,122 @@
+services:
+  central_1:
+    image: electricity-monitoring:latest
+    build: .
+    container_name: central_actor_1
+    environment:
+      - TZ=Europe/Belgrade
+      - ACTOR_TYPE=central
+      - CENTRAL_ID=central_1
+      - ACTOR_PORT=1900
+      - P2P_PORT=1902
+      - PEER_CENTRALS=central_2:1901
+      - PEER_P2P_PORTS=central_2:1903
+      - THESPIAN_BASE=multiprocTCPBase
+    ports:
+      - "1900:1900"
+      - "1902:1902"
+    networks:
+      - electricity_network
+    volumes:
+      - ./logs:/app/logs
+      - ./plots:/app/plots
+
+  central_2:
+    image: electricity-monitoring:latest
+    container_name: central_actor_2
+    environment:
+      - TZ=Europe/Belgrade
+      - ACTOR_TYPE=central
+      - CENTRAL_ID=central_2
+      - ACTOR_PORT=1901
+      - P2P_PORT=1903
+      - PEER_CENTRALS=central_1:1900
+      - PEER_P2P_PORTS=central_1:1902
+      - THESPIAN_BASE=multiprocTCPBase
+      - THESPIAN_CONVENTION_ADDR=central_1:1900
+    ports:
+      - "1901:1901"
+      - "1903:1903"
+    networks:
+      - electricity_network
+    volumes:
+      - ./logs:/app/logs
+      - ./plots:/app/plots
+
+  household_1:
+    image: electricity-monitoring:latest
+    container_name: household_actor_1
+    environment:
+      - TZ=Europe/Belgrade
+      - ACTOR_TYPE=household
+      - HOUSEHOLD_ID=1
+      - CENTRAL_HOST=central_1
+      - CENTRAL_PORT=1900
+      - THESPIAN_BASE=multiprocTCPBase
+      - THESPIAN_CONVENTION_ADDR=central_1:1900
+    depends_on:
+      - central_1
+    networks:
+      - electricity_network
+    volumes:
+      - ./logs:/app/logs
+
+  household_2:
+    image: electricity-monitoring:latest
+    container_name: household_actor_2
+    environment:
+      - TZ=Europe/Belgrade
+      - ACTOR_TYPE=household
+      - HOUSEHOLD_ID=2
+      - CENTRAL_HOST=central_1
+      - CENTRAL_PORT=1900
+      - THESPIAN_BASE=multiprocTCPBase
+      - THESPIAN_CONVENTION_ADDR=central_1:1900
+    depends_on:
+      - central_1
+    networks:
+      - electricity_network
+    volumes:
+      - ./logs:/app/logs
+
+  household_3:
+    image: electricity-monitoring:latest
+    container_name: household_actor_3
+    environment:
+      - TZ=Europe/Belgrade
+      - ACTOR_TYPE=household
+      - HOUSEHOLD_ID=3
+      - CENTRAL_HOST=central_2
+      - CENTRAL_PORT=1901
+      - THESPIAN_BASE=multiprocTCPBase
+      - THESPIAN_CONVENTION_ADDR=central_1:1900
+    depends_on:
+      - central_1
+      - central_2
+    networks:
+      - electricity_network
+    volumes:
+      - ./logs:/app/logs
+
+  household_4:
+    image: electricity-monitoring:latest
+    container_name: household_actor_4
+    environment:
+      - TZ=Europe/Belgrade
+      - ACTOR_TYPE=household
+      - HOUSEHOLD_ID=4
+      - CENTRAL_HOST=central_2
+      - CENTRAL_PORT=1901
+      - THESPIAN_BASE=multiprocTCPBase
+      - THESPIAN_CONVENTION_ADDR=central_1:1900
+    depends_on:
+      - central_1
+      - central_2
+    networks:
+      - electricity_network
+    volumes:
+      - ./logs:/app/logs
+
+networks:
+  electricity_network:
+    driver: bridge

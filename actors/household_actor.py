@@ -175,36 +175,69 @@ class HouseholdActor(Actor):
         
         logger.info(f"[{self.household_id}] Training requested - have {len(self.consumption_history)} data points")
         
-        if len(self.consumption_history) < 3:
-            logger.warning(f"{self.household_id} has insufficient data for training (need 3+, have {len(self.consumption_history)})")
+        if len(self.consumption_history) < 6:
+            logger.warning(f"{self.household_id} has insufficient data for training (need 6+, have {len(self.consumption_history)})")
             return
         
-        # Simulate local training
+        # REAL local training with gradient descent
         import numpy as np
         from sklearn.metrics import mean_squared_error, mean_absolute_error
         
         local_weights = global_model["weights"].copy()
         local_bias = global_model["bias"]
         
-        # Add some noise to simulate training
-        local_weights += np.random.randn(24) * 0.01
-        local_bias += np.random.uniform(-0.01, 0.01)
+        # train/test split (80% train, 20% test) 
+        split_idx = int(len(self.consumption_history) * 0.8)
+        train_data = self.consumption_history[:split_idx]  # Older data for training
+        test_data = self.consumption_history[split_idx:]   # Newer data for testing
+        
+        # Training hyperparameters
+        learning_rate = 0.01
+        epochs = 10
+        
+        logger.info(
+            f"[{self.household_id}] Starting training on {len(train_data)} data points "
+            f"(test set: {len(test_data)} points) for {epochs} epochs..."
+        )
+        
+        # Gradient descent training - ONLY on train_data
+        for epoch in range(epochs):
+            total_loss = 0.0
+            
+            for data in train_data:
+                hour = data.timestamp.hour
+                actual_consumption = data.consumption
+                
+                # Forward pass: prediction
+                if 0 <= hour < 24:
+                    predicted_consumption = local_weights[hour] + local_bias
+                    
+                    # Calculate error
+                    error = actual_consumption - predicted_consumption
+                    total_loss += error ** 2
+                    # Backward pass: update weights and bias
+                    local_weights[hour] += learning_rate * error
+                    local_bias += learning_rate * error * 0.1  # Smaller update for bias
+            
+            avg_loss = total_loss / len(train_data)
+            if epoch % 3 == 0:
+                logger.info(f"[{self.household_id}] Epoch {epoch+1}/{epochs} - Train Loss: {avg_loss:.4f}")
         
         logger.info(f"{self.household_id} completed local training")
         
-        # Evaluate model on local data
+        # Evaluate model on TEST data
         y_true = []
         y_pred = []
         
-        for data in self.consumption_history[-20:]:  # Last 20 points
+        for data in test_data:  # ← ONLY TEST DATA!
             hour = data.timestamp.hour
             y_true.append(data.consumption)
-            # Simple prediction: weights[hour] + bias
+            # Prediction using trained model
             if 0 <= hour < 24:
                 prediction = local_weights[hour] + local_bias
                 y_pred.append(max(0.0, prediction))
         
-        logger.info(f"[{self.household_id}] Evaluating on {len(y_true)} data points...")
+        logger.info(f"[{self.household_id}] Evaluating on {len(y_true)} TEST data points (unseen during training)...")
         
         # Calculate evaluation metrics (need at least 2 points)
         if len(y_true) >= 2:
@@ -213,7 +246,7 @@ class HouseholdActor(Actor):
             rmse = np.sqrt(mse)
             
             logger.info(
-                f"📊 [{self.household_id}] Local Model Evaluation: "
+                f"📊 [{self.household_id}] Local Model Evaluation (on TEST set): "
                 f"MSE={mse:.4f}, MAE={mae:.4f}, RMSE={rmse:.4f}"
             )
             
@@ -223,7 +256,7 @@ class HouseholdActor(Actor):
                 "RMSE": float(rmse)
             }
         else:
-            logger.warning(f"[{self.household_id}] Insufficient data for evaluation (need 2+, have {len(y_true)})")
+            logger.warning(f"[{self.household_id}] Insufficient test data for evaluation (need 2+, have {len(y_true)})")
             evaluation_metrics = None
         
         # Send updated model back to central with evaluation metrics

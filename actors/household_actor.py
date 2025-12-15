@@ -44,10 +44,19 @@ class HouseholdActor(Actor):
     def receiveMessage(self, message, sender):
         """Handle incoming messages"""
         # Handle Thespian system messages
-        from thespian.actors import WakeupMessage
+        from thespian.actors import WakeupMessage, ActorExitRequest, ChildActorExited
+        
         if isinstance(message, WakeupMessage):
             if self.is_monitoring:
                 self._collect_consumption_data()
+            return
+        
+        if isinstance(message, ActorExitRequest):
+            self._handle_exit_request()
+            return
+        
+        if isinstance(message, ChildActorExited):
+            self._handle_child_exit(message)
             return
         
         # Handle application messages (must be dict)
@@ -67,16 +76,10 @@ class HouseholdActor(Actor):
             self._send_data_to_central()
         elif msg_type == "train_local_model":
             self._train_local_model(message)
-        elif msg_type == "update_model":
-            self._update_prediction_model(message)
         elif msg_type == "sync_crdt":
             self._sync_crdt(message)
-        elif msg_type == "initial_model":
-            self._receive_initial_model(message)
         elif msg_type == "toggle_room":
             self._toggle_room(message)
-        elif msg_type == "get_rooms":
-            self._send_room_status(sender)
         elif msg_type == "shutdown_room":
             self._shutdown_room(message)
         elif msg_type == "reduce_consumption":
@@ -270,15 +273,6 @@ class HouseholdActor(Actor):
             "evaluation_metrics": evaluation_metrics
         })
     
-    def _update_prediction_model(self, message):
-        """Update local prediction model from federated learning"""
-        model_weights = message.get("model_weights")
-        logger.info(f"{self.household_id} received updated global model")
-        
-    def _receive_initial_model(self, message):
-        """Receive initial model from central actor"""
-        logger.info(f"{self.household_id} received initial model from central")
-        
     def _sync_crdt(self, message):
         """Synchronize CRDT state with other actors"""
         remote_state = message.get("crdt_state")
@@ -294,10 +288,6 @@ class HouseholdActor(Actor):
         """Toggle a room on/off"""
         room_name = message.get("room_name")
         self.simulator.toggle_room(room_name)
-    
-    def _send_room_status(self, sender):
-        """Send current status of all rooms"""
-        room_status = self.simulator.get_room_status()
     
     def _shutdown_room(self, message):
         """Shutdown a specific room due to high consumption"""
@@ -354,6 +344,10 @@ class HouseholdActor(Actor):
     def _handle_exit_request(self):
         """Handle actor shutdown request"""
         logger.warning(f"⚠️ [{self.household_id}] Received exit request, shutting down gracefully...")
+        
+        # Stop monitoring loop
+        self.is_monitoring = False
+        
         self._transition_state(HouseholdState.SHUTDOWN)
         self.shutdown_requested = True
         

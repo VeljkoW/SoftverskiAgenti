@@ -231,12 +231,6 @@ class CentralActor(Actor):
         
         logger.info(f"[{self.actor_id}] Registered household: {household_id} (Total: {len(self.households)})")
         
-        # Send initial model to the household
-        self.send(sender, {
-            "type": "initial_model",
-            "model_weights": self.fl_coordinator.get_global_model()
-        })
-        
         # Track as child actor
         self.child_actors[household_id] = sender
         
@@ -477,14 +471,7 @@ class CentralActor(Actor):
         if self.fl_coordinator.ready_to_aggregate():
             global_model = self.fl_coordinator.aggregate_models()
             
-            # Broadcast updated model to all households
-            for household_actor in self.households.values():
-                self.send(household_actor, {
-                    "type": "update_model",
-                    "model_weights": global_model
-                })
-            
-            logger.info(f"[{self.actor_id}] Global model updated and broadcast to {len(self.households)} households")
+            logger.info(f"[{self.actor_id}] Global model aggregated from {len(self.households)} households")
             
             # Return to MONITORING state after coordination
             self._transition_state(CentralState.MONITORING)

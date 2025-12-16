@@ -88,10 +88,6 @@ class CentralActor(Actor):
             self._handle_child_exit(message)
             return
         
-        if isinstance(message, WakeupMessage):
-            self._periodic_training_check()
-            return
-        
         # Handle application messages (must be dict)
         if not isinstance(message, dict):
             logger.warning(f"[{self.actor_id}] Received unknown message type: {type(message)}")
@@ -131,8 +127,6 @@ class CentralActor(Actor):
             if peer_id and peer_address:
                 self.peer_centrals[peer_id] = peer_address
                 logger.info(f"[{self.actor_id}] ✓ Peer {peer_id} confirmed at {peer_address}")
-        elif msg_type == "discover_peers":
-            self._respond_to_discovery(sender)
         elif msg_type == "discover_households":
             self._discover_households()
         elif msg_type == "household_shutdown":
@@ -238,10 +232,6 @@ class CentralActor(Actor):
         if len(self.households) == 1:
             # Transition to MONITORING state
             self._transition_state(CentralState.MONITORING)
-            
-            self.wakeupAfter(timedelta(seconds=30))
-            # Start peer discovery
-            self.wakeupAfter(timedelta(seconds=self.discovery_interval))
     
     def _start_p2p_server(self):
         """Start TCP server for P2P communication"""
@@ -310,24 +300,24 @@ class CentralActor(Actor):
             logger.info(f"[{self.actor_id}] ← Received consumption data from peer {peer_id}: {data['household_id']} - {data['consumption']:.2f} kWh")
         elif msg_type == "model_update":
             peer_id = message.get("peer_id")
-            logger.info(f"[{self.actor_id}] ← Received model update from peer {peer_id}")
-            self.peer_models[peer_id] = message.get("model")
+            peer_model = message.get("model")
+            peer_round = message.get("training_round", 0)
+            
+            self.peer_models[peer_id] = {
+                "model": peer_model,
+                "round": peer_round
+            }
+            
+            logger.info(f"[{self.actor_id}] ← Received model update from peer {peer_id} (round {peer_round})")
+            
+            # Merge peer models if we have completed our local aggregation
+            if peer_round >= self.training_rounds and self.fl_coordinator.ready_to_aggregate() == False:
+                self._merge_peer_models()
         elif msg_type == "sync_crdt":
             peer_id = message.get("peer_id")
             peer_crdt_state = message.get("crdt_state")
             self.crdt_register.merge(peer_crdt_state)
             logger.info(f"[{self.actor_id}] ← Received CRDT sync from peer {peer_id}")
-    
-    def _register_peer_central(self, message, sender):
-        """UNUSED - peers registered directly in _discover_peer"""
-        pass
-    
-    def _respond_to_discovery(self, sender):
-        """Respond to peer discovery request"""
-        self.send(sender, {
-            "type": "register_peer_central",
-            "central_id": self.actor_id
-        })
     
     def _discover_peer(self, message):
         """Connect to peer central via raw TCP socket"""
@@ -530,15 +520,6 @@ class CentralActor(Actor):
                     "crdt_state": self.crdt_register.get_state()
                 }
                 self._send_p2p_message(peer_socket, message)
-            
-    def _periodic_training_check(self):
-        """Periodic check to trigger training if enough data accumulated"""
-        if self.data_count >= self.training_threshold:
-            self._coordinate_training()
-            self.data_count = 0
-            
-        # Schedule next check
-        self.wakeupAfter(timedelta(seconds=30))
     
     def _handle_peer_model_sync(self, message, sender):
         """Handle model synchronization from peer CentralActor"""
@@ -611,7 +592,8 @@ class CentralActor(Actor):
             message = {
                 "type": "model_update",
                 "peer_id": self.actor_id,
-                "model": global_model
+                "model": global_model,
+                "training_round": self.training_rounds
             }
             self._send_p2p_message(peer_socket, message)
             

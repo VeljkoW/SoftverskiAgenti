@@ -9,7 +9,9 @@ print("=" * 70)
 import logging
 import time
 import os
-from thespian.actors import ActorSystem
+import signal
+import sys
+from thespian.actors import ActorSystem, ActorExitRequest
 from actors.household_actor import HouseholdActor
 from actors.central_actor import CentralActor  # Needed for globalName lookup
 
@@ -21,6 +23,16 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 print(f"ACTOR_TYPE from env: {os.getenv('ACTOR_TYPE', 'NOT_SET')}")
+
+# Global flag for graceful shutdown
+shutdown_requested = False
+
+def signal_handler(signum, frame):
+    """Handle SIGTERM and SIGINT for graceful shutdown"""
+    global shutdown_requested
+    signal_name = "SIGTERM" if signum == signal.SIGTERM else "SIGINT"
+    logger.warning(f"⚠️ Received {signal_name} - initiating graceful shutdown...")
+    shutdown_requested = True
 
 
 def main():
@@ -42,6 +54,12 @@ def main():
 
 def run_central():
     """Run ONLY ONE central actor in this container"""
+    global shutdown_requested
+    
+    # Register signal handlers FIRST
+    signal.signal(signal.SIGTERM, signal_handler)  # Docker stop
+    signal.signal(signal.SIGINT, signal_handler)   # Ctrl+C
+    
     central_id = os.getenv('CENTRAL_ID', 'central_1')
     actor_port = int(os.getenv('ACTOR_PORT', 1900))
     peer_centrals_str = os.getenv('PEER_CENTRALS', '')
@@ -100,18 +118,36 @@ def run_central():
         logger.info(f"Discovering household actors...")
         actor_system.tell(central_actor, {"type": "discover_households"})
         
-        # Keep running
-        while True:
-            time.sleep(1)
+        # Keep running until shutdown requested
+        logger.info(f"✓ {central_id} running - waiting for shutdown signal...")
+        while not shutdown_requested:
+            time.sleep(0.5)  # Check flag every 0.5s
+        
+        # Graceful shutdown
+        logger.warning(f"🛑 Shutting down {central_id} gracefully...")
+        actor_system.tell(central_actor, ActorExitRequest())
+        time.sleep(2)  # Give actor time to cleanup
             
     except KeyboardInterrupt:
-        logger.info(f"Shutting down {central_id}")
+        logger.info(f"⚠️ KeyboardInterrupt - Shutting down {central_id}")
+        actor_system.tell(central_actor, ActorExitRequest())
+        time.sleep(2)
+    except Exception as e:
+        logger.error(f"❌ Error in {central_id}: {e}", exc_info=True)
     finally:
+        logger.info(f"🔌 {central_id} shutting down ActorSystem...")
         actor_system.shutdown()
+        logger.info(f"✓ {central_id} shutdown complete")
 
 
 def run_household():
     """Run ONLY ONE household actor in this container"""
+    global shutdown_requested
+    
+    # Register signal handlers FIRST
+    signal.signal(signal.SIGTERM, signal_handler)  # Docker stop
+    signal.signal(signal.SIGINT, signal_handler)   # Ctrl+C
+    
     household_id = int(os.getenv('HOUSEHOLD_ID', 1))
     central_host = os.getenv('CENTRAL_HOST', 'central_1')
     central_port = int(os.getenv('CENTRAL_PORT', 1900))
@@ -142,16 +178,26 @@ def run_household():
         
         logger.info(f"✓ household_{household_id} sent registration request to {central_host}")
         
-        # Keep running
-        while True:
-            time.sleep(1)
+        # Keep running until shutdown requested
+        logger.info(f"✓ household_{household_id} running - waiting for shutdown signal...")
+        while not shutdown_requested:
+            time.sleep(0.5)  # Check flag every 0.5s
+        
+        # Graceful shutdown
+        logger.warning(f"🛑 Shutting down household_{household_id} gracefully...")
+        actor_system.tell(household_actor, ActorExitRequest())
+        time.sleep(2)  # Give actor time to cleanup
             
     except KeyboardInterrupt:
-        logger.info(f"Shutting down household_{household_id}")
+        logger.info(f"⚠️ KeyboardInterrupt - Shutting down household_{household_id}")
+        actor_system.tell(household_actor, ActorExitRequest())
+        time.sleep(2)
     except Exception as e:
-        logger.error(f"Error: {e}", exc_info=True)
+        logger.error(f"❌ Error in household_{household_id}: {e}", exc_info=True)
     finally:
+        logger.info(f"🔌 household_{household_id} shutting down ActorSystem...")
         actor_system.shutdown()
+        logger.info(f"✓ household_{household_id} shutdown complete")
 
 
 if __name__ == "__main__":
